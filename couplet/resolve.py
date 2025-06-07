@@ -277,7 +277,7 @@ def resolve_reads(
         resolution_tag = f"\tXR:i:{resolution_tag}"
 
     # Add a base modification tag
-    base_mod_tag = compute_base_mod_tag(genomic_seq, epigenomic_seq, modifications)
+    mm_tag, ml_tag = compute_base_mod_tag(genomic_seq, epigenomic_seq, modifications)
 
     # Export original quality scores if requested
     if orig_quals_in_sam_tag is True:
@@ -297,13 +297,54 @@ def resolve_reads(
 
     result = SeqRecord(
         seq=Seq(genomic_seq),
-        id=f"{r1.id}{episeq_formatted}{resolution_tag}{base_mod_tag}"
+        id=f"{r1.id}{episeq_formatted}{resolution_tag}{mm_tag}{ml_tag}"
         f"{orig_quals_tag}{fragment_length_tag}",
         letter_annotations={"phred_quality": resolved_phred},
         description="",
     )
 
     return result
+
+def compute_base_mod_tag_unambiguous(genomic_seq, epigenomic_seq, modifications):
+    """Computes a SAM tag for base modifications.
+    Does not allow C+mh calls; only C+m or C+h.
+    """
+    modifications = {'PQ': ['C', 'm'], 'PG': ['C', 'h']}
+
+    mm_tag = "\tMM:Z:"
+    ml_tag = "\tML:B:C"
+
+    # Loop over modifications
+    for key, values in modifications.items():
+
+        # Example: mod = { "P": ["C", "mh"] }
+        epi_context = key
+        gen_base = values[0]
+        SAM_code = values[1]
+
+        # Create initial part of tag for current modification
+        mm_tag += f"{gen_base}+{SAM_code}?" 
+
+        # Counts number of times since a modification has been seen
+        non_mod_counter = 0
+
+        # Order of terms separated by OR in the regex defines preference, e.g.
+        # re.findall("C|PG|P") means that we find "PG" before we find "P".
+        # If { "P": ["C", "mh"] }, then find epi_context and epi_context[0] still return
+        # all relevant results and the 1-let correct match triggers tag modification
+        for match in re.findall(
+            f"{gen_base}|{epi_context}|{epi_context[0]}", epigenomic_seq
+        ):
+            if match == epi_context:
+                mm_tag += "," + str(non_mod_counter)
+                ml_tag += ",255" # assign maximum likelihood to all mods
+                non_mod_counter = 0
+            else:
+                non_mod_counter += 1
+
+        mm_tag += ";"
+
+    return mm_tag, ml_tag
 
 
 def compute_base_mod_tag(genomic_seq, epigenomic_seq, modifications):
@@ -333,36 +374,38 @@ def compute_base_mod_tag(genomic_seq, epigenomic_seq, modifications):
     Returns:
         A tag with base modification information.
     """
+    return compute_base_mod_tag_unambiguous(genomic_seq, epigenomic_seq, modifications)
 
-    tag = "\tMM:Z:"
+    ### ORGINAL CODE ###
+    # tag = "\tMM:Z:"
 
-    # Loop over modifications
-    for key, values in modifications.items():
+    # # Loop over modifications
+    # for key, values in modifications.items():
 
-        # Example: mod = { "P": ["C", "mh"] }
-        epi_context = key
-        gen_base = values[0]
-        SAM_code = values[1]
+    #     # Example: mod = { "P": ["C", "mh"] }
+    #     epi_context = key
+    #     gen_base = values[0]
+    #     SAM_code = values[1]
 
-        # Create initial part of tag for current modification
-        tag += f"{gen_base}+{SAM_code}"
+    #     # Create initial part of tag for current modification
+    #     tag += f"{gen_base}+{SAM_code}"
 
-        # Counts number of times since a modification has been seen
-        non_mod_counter = 0
+    #     # Counts number of times since a modification has been seen
+    #     non_mod_counter = 0
 
-        # Order of terms separated by OR in the regex defines preference, e.g.
-        # re.findall("C|PG|P") means that we find "PG" before we find "P".
-        # If { "P": ["C", "mh"] }, then find epi_context and epi_context[0] still return
-        # all relevant results and the 1-let correct match triggers tag modification
-        for match in re.findall(
-            f"{gen_base}|{epi_context}|{epi_context[0]}", epigenomic_seq
-        ):
-            if match == epi_context:
-                tag += "," + str(non_mod_counter)
-                non_mod_counter = 0
-            else:
-                non_mod_counter += 1
+    #     # Order of terms separated by OR in the regex defines preference, e.g.
+    #     # re.findall("C|PG|P") means that we find "PG" before we find "P".
+    #     # If { "P": ["C", "mh"] }, then find epi_context and epi_context[0] still return
+    #     # all relevant results and the 1-let correct match triggers tag modification
+    #     for match in re.findall(
+    #         f"{gen_base}|{epi_context}|{epi_context[0]}", epigenomic_seq
+    #     ):
+    #         if match == epi_context:
+    #             tag += "," + str(non_mod_counter)
+    #             non_mod_counter = 0
+    #         else:
+    #             non_mod_counter += 1
 
-        tag += ";"
+    #     tag += ";"
 
-    return tag
+    # return tag
