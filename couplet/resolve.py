@@ -277,7 +277,7 @@ def resolve_reads(
         resolution_tag = f"\tXR:i:{resolution_tag}"
 
     # Add a base modification tag
-    mm_tag, ml_tag = compute_base_mod_tag(genomic_seq, epigenomic_seq, modifications)
+    mm_tag, ml_tag = compute_base_mod_tag(epigenomic_seq, modifications)
 
     # Export original quality scores if requested
     if orig_quals_in_sam_tag is True:
@@ -305,11 +305,13 @@ def resolve_reads(
 
     return result
 
-def compute_base_mod_tag_unambiguous(genomic_seq, epigenomic_seq, modifications):
+def compute_base_mod_tag_unambiguous(epigenomic_seq, modifications):
     """Computes a SAM tag for base modifications.
-    Does not allow C+mh calls; only C+m or C+h.
+    Introduces an additional code for unknown modifications, for a total of
+    C+m, C+h, and C+u. Thus, each delta list will refer to unique cytosines.
+    Also adds an ML tag with likelihoods for each modification (default to 255).
     """
-    modifications = {'PQ': ['C', 'm'], 'PG': ['C', 'h']}
+    modifications = {'PQ': ['C', 'm'], 'PG': ['C', 'h']} # C+u added separately
 
     mm_tag = "\tMM:Z:"
     ml_tag = "\tML:B:C"
@@ -341,13 +343,33 @@ def compute_base_mod_tag_unambiguous(genomic_seq, epigenomic_seq, modifications)
                 non_mod_counter = 0
             else:
                 non_mod_counter += 1
-
         mm_tag += ";"
+    
+    # one more loop to identify C+u modifications
+    non_mod_counter = 0
+    mm_tag += 'C+u?'
+    for i, b in enumerate(epigenomic_seq):
+        if b == 'P':
+            if i+1 == len(epigenomic_seq) or epigenomic_seq[i+1] not in ('G','Q'):
+                mm_tag += f',{non_mod_counter}'
+                ml_tag += ',255'
+                non_mod_counter = 0
+            else:
+                non_mod_counter += 1
+        elif b == 'C':
+            non_mod_counter += 1
+    mm_tag += ';'
+
+    # empty MM/ML tags are incompatible with modkit
+    #   add a modification with probability 0
+    if ml_tag == "\tML:B:C":
+        mm_tag = "\tMM:Z:C+m?;C+h?;C+u?,0;"
+        ml_tag += ",0"
 
     return mm_tag, ml_tag
 
 
-def compute_base_mod_tag(genomic_seq, epigenomic_seq, modifications):
+def compute_base_mod_tag(epigenomic_seq, modifications):
 
     """Computes a SAM tag for base modifications.
 
@@ -374,7 +396,7 @@ def compute_base_mod_tag(genomic_seq, epigenomic_seq, modifications):
     Returns:
         A tag with base modification information.
     """
-    return compute_base_mod_tag_unambiguous(genomic_seq, epigenomic_seq, modifications)
+    return compute_base_mod_tag_unambiguous(epigenomic_seq, modifications)
 
     ### ORGINAL CODE ###
     # tag = "\tMM:Z:"

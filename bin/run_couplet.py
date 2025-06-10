@@ -287,7 +287,8 @@ def main():
             log_and_plot_additional_stats_single(stats, rule, additional_stats_file)
         else:
             log_additional_stats(stats, rule, additional_stats_file)
-
+    
+    print(f'finished processing {resolved_path}')
 
 if __name__ == "__main__":
     main()
