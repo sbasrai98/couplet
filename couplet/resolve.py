@@ -81,7 +81,7 @@ def resolve_phred_with_qtable(qseq1, qseq2, seq1, seq2, quality_table=None):
 
 @functools.lru_cache(maxsize=1764)
 def get_letter_joint_prob(Q1, Q2):
-    """Return a new int based quality  on joint probability
+    """Return a new int based quality on joint probability
     Where Q1 and Q2 are quality integers
     """
 
@@ -99,7 +99,35 @@ def get_letter_joint_prob(Q1, Q2):
 
     return retQ
 
+@functools.lru_cache(maxsize=1764)
+def get_mod_joint_prob(Q1, Q2):
+    """Return a probability based on 2 bases, scaled to 255 for ML tag"""
 
+    R1_prob = 10.0 ** (-Q1 / 10.0)
+    R2_prob = 10.0 ** (-Q2 / 10.0)
+
+    prob = (R1_prob + R2_prob) - (R1_prob * R2_prob)
+    prob = int((1 - prob) * 255) # value for ML tag
+    return prob
+
+def get_mod_joint_prob_4(Q1, Q2, Q3, Q4):
+    """Return a probability based on 4 bases, scaled to 255 for ML tag"""
+
+    p1 = 10.0 ** (-Q1 / 10.0)
+    p2 = 10.0 ** (-Q2 / 10.0)
+    p3 = 10.0 ** (-Q3 / 10.0)
+    p4 = 10.0 ** (-Q4 / 10.0)
+
+    # Inclusion-Exclusion formula for 4 events
+    prob = (
+        p1 + p2 + p3 + p4
+        - (p1 * p2 + p1 * p3 + p1 * p4 + p2 * p3 + p2 * p4 + p3 * p4)
+        + (p1 * p2 * p3 + p1 * p2 * p4 + p1 * p3 * p4 + p2 * p3 * p4)
+        - (p1 * p2 * p3 * p4)
+    )
+    prob = int((1 - prob) * 255) # value for ML tag
+    return prob
+    
 def resolve_phred_prob(qseq1, qseq2, seq1, seq2):
     """Resolve the quality scores in a pair of aligned quality sequences
 
@@ -120,6 +148,15 @@ def resolve_phred_prob(qseq1, qseq2, seq1, seq2):
 
     return [get_letter_joint_prob(q1, q2) for q1, q2 in zip(qseq1, qseq2)]
 
+def resolve_modification_phred_prob(qseq1, qseq2, epigenomic_seq):
+    """Calculate modification probabilities for the ML tag.
+    
+    For C+m or C+h modifications, take the joint probability of the
+    two quality scores at the position of the modification (i.e., PG or PQ).
+    
+    For C+u modifications, use the probability of the first base (i.e., P).
+    """
+    pass
 
 def trim_n(genomic_seq, epigenomic_seq, resolved_phred, Q1, Q2):
     """Trim N's from the head and tail of a resolved read
@@ -277,7 +314,7 @@ def resolve_reads(
         resolution_tag = f"\tXR:i:{resolution_tag}"
 
     # Add a base modification tag
-    mm_tag, ml_tag = compute_base_mod_tag(epigenomic_seq, modifications)
+    mm_tag, ml_tag = compute_base_mod_tag_unique(Q1, Q2, epigenomic_seq)
 
     # Export original quality scores if requested
     if orig_quals_in_sam_tag is True:
@@ -305,7 +342,7 @@ def resolve_reads(
 
     return result
 
-def compute_base_mod_tag_unambiguous(epigenomic_seq, modifications):
+def compute_base_mod_tag_unique(Q1, Q2, epigenomic_seq):
     """Computes a SAM tag for base modifications.
     Introduces an additional code for unknown modifications, for a total of
     C+m, C+h, and C+u. Thus, each delta list will refer to unique cytosines.
@@ -334,12 +371,15 @@ def compute_base_mod_tag_unambiguous(epigenomic_seq, modifications):
         # re.findall("C|PG|P") means that we find "PG" before we find "P".
         # If { "P": ["C", "mh"] }, then find epi_context and epi_context[0] still return
         # all relevant results and the 1-let correct match triggers tag modification
-        for match in re.findall(
+        for match in re.finditer(
             f"{gen_base}|{epi_context}|{epi_context[0]}", epigenomic_seq
         ):
-            if match == epi_context:
+            if match.group() == epi_context:
                 mm_tag += "," + str(non_mod_counter)
-                ml_tag += ",255" # assign maximum likelihood to all mods
+                # ML = joint probability of 4 bases (PQ/PG at read 1 and 2) scaled to 255
+                q1, q2, q3, q4 = Q1[match.start(): match.end()] + Q2[match.start(): match.end()]
+                ml_tag += f",{get_mod_joint_prob_4(q1, q2, q3, q4)}"
+                # ml_tag += ",255"
                 non_mod_counter = 0
             else:
                 non_mod_counter += 1
@@ -352,7 +392,9 @@ def compute_base_mod_tag_unambiguous(epigenomic_seq, modifications):
         if b == 'P':
             if i+1 == len(epigenomic_seq) or epigenomic_seq[i+1] not in ('G','Q'):
                 mm_tag += f',{non_mod_counter}'
-                ml_tag += ',255'
+                # ML = probability of first base (P)
+                ml_tag += f",{get_mod_joint_prob(Q1[i], Q2[i])}"
+                # ml_tag += ',255'
                 non_mod_counter = 0
             else:
                 non_mod_counter += 1
@@ -369,7 +411,8 @@ def compute_base_mod_tag_unambiguous(epigenomic_seq, modifications):
     return mm_tag, ml_tag
 
 
-def compute_base_mod_tag(epigenomic_seq, modifications):
+### ORIGINAL FUNCTION NO LONGER USED ###
+def compute_base_mod_tag(genomic_seq, epigenomic_seq, modifications):
 
     """Computes a SAM tag for base modifications.
 
@@ -396,38 +439,36 @@ def compute_base_mod_tag(epigenomic_seq, modifications):
     Returns:
         A tag with base modification information.
     """
-    return compute_base_mod_tag_unambiguous(epigenomic_seq, modifications)
 
-    ### ORGINAL CODE ###
-    # tag = "\tMM:Z:"
+    tag = "\tMM:Z:"
 
-    # # Loop over modifications
-    # for key, values in modifications.items():
+    # Loop over modifications
+    for key, values in modifications.items():
 
-    #     # Example: mod = { "P": ["C", "mh"] }
-    #     epi_context = key
-    #     gen_base = values[0]
-    #     SAM_code = values[1]
+        # Example: mod = { "P": ["C", "mh"] }
+        epi_context = key
+        gen_base = values[0]
+        SAM_code = values[1]
 
-    #     # Create initial part of tag for current modification
-    #     tag += f"{gen_base}+{SAM_code}"
+        # Create initial part of tag for current modification
+        tag += f"{gen_base}+{SAM_code}"
 
-    #     # Counts number of times since a modification has been seen
-    #     non_mod_counter = 0
+        # Counts number of times since a modification has been seen
+        non_mod_counter = 0
 
-    #     # Order of terms separated by OR in the regex defines preference, e.g.
-    #     # re.findall("C|PG|P") means that we find "PG" before we find "P".
-    #     # If { "P": ["C", "mh"] }, then find epi_context and epi_context[0] still return
-    #     # all relevant results and the 1-let correct match triggers tag modification
-    #     for match in re.findall(
-    #         f"{gen_base}|{epi_context}|{epi_context[0]}", epigenomic_seq
-    #     ):
-    #         if match == epi_context:
-    #             tag += "," + str(non_mod_counter)
-    #             non_mod_counter = 0
-    #         else:
-    #             non_mod_counter += 1
+        # Order of terms separated by OR in the regex defines preference, e.g.
+        # re.findall("C|PG|P") means that we find "PG" before we find "P".
+        # If { "P": ["C", "mh"] }, then find epi_context and epi_context[0] still return
+        # all relevant results and the 1-let correct match triggers tag modification
+        for match in re.findall(
+            f"{gen_base}|{epi_context}|{epi_context[0]}", epigenomic_seq
+        ):
+            if match == epi_context:
+                tag += "," + str(non_mod_counter)
+                non_mod_counter = 0
+            else:
+                non_mod_counter += 1
 
-    #     tag += ";"
+        tag += ";"
 
-    # return tag
+    return tag
