@@ -107,9 +107,10 @@ def get_mod_joint_prob(Q1, Q2):
     R2_prob = 10.0 ** (-Q2 / 10.0)
 
     prob = (R1_prob + R2_prob) - (R1_prob * R2_prob)
-    prob = int((1 - prob) * 255) # value for ML tag
+    prob = int(round((1 - prob) * 255, 0)) # value for ML tag
     return prob
 
+@functools.lru_cache(maxsize=74088)
 def get_mod_joint_prob_4(Q1, Q2, Q3, Q4):
     """Return a probability based on 4 bases, scaled to 255 for ML tag"""
 
@@ -125,7 +126,7 @@ def get_mod_joint_prob_4(Q1, Q2, Q3, Q4):
         + (p1 * p2 * p3 + p1 * p2 * p4 + p1 * p3 * p4 + p2 * p3 * p4)
         - (p1 * p2 * p3 * p4)
     )
-    prob = int((1 - prob) * 255) # value for ML tag
+    prob = int(round((1 - prob) * 255, 0)) # value for ML tag
     return prob
     
 def resolve_phred_prob(qseq1, qseq2, seq1, seq2):
