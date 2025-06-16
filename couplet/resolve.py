@@ -315,7 +315,11 @@ def resolve_reads(
         resolution_tag = f"\tXR:i:{resolution_tag}"
 
     # Add a base modification tag
-    mm_tag, ml_tag = compute_base_mod_tag_unique(Q1, Q2, epigenomic_seq)
+    # mm_tag, ml_tag = compute_base_mod_tag_unique(Q1, Q2, epigenomic_seq)
+
+    # Add modification information into QUAL string:
+    resolved_phred = add_mods_to_qual_string(epigenomic_seq, resolved_phred)
+
 
     # Export original quality scores if requested
     if orig_quals_in_sam_tag is True:
@@ -335,13 +339,42 @@ def resolve_reads(
 
     result = SeqRecord(
         seq=Seq(genomic_seq),
-        id=f"{r1.id}{episeq_formatted}{resolution_tag}{mm_tag}{ml_tag}"
+        id=f"{r1.id}{episeq_formatted}{resolution_tag}" # {mm_tag}{ml_tag}
         f"{orig_quals_tag}{fragment_length_tag}",
         letter_annotations={"phred_quality": resolved_phred},
         description="",
     )
 
     return result
+
+
+def add_mods_to_qual_string(epigenomic_seq, phred):
+    """Encodes modifications into qual string.
+     - H (39): 5hmC in CpG
+     - I (40): 5mC in CpG
+     - J (41): 5mC in CpH
+     - K (42): Unknown modification (ambiguous next base)
+     - all other Q scores capped to 38"""
+    
+    # cap all scores at 38
+    phred = [38 if x > 38 else x for x in phred]
+    seqlen = len(epigenomic_seq)
+
+    for i, base in enumerate(epigenomic_seq):
+        if base == 'P': # modified C
+            if i < seqlen-1: # not the final base in read
+                if epigenomic_seq[i+1] == 'G':
+                    phred[i] = 39
+                elif epigenomic_seq[i+1] == 'Q':
+                    phred[i] = 40
+                elif epigenomic_seq[i+1] in 'CTAP':
+                    phred[i] = 41
+                else: # next base is N
+                    phred[i] = 42
+            else:
+                phred[i] = 42
+
+    return phred
 
 def compute_base_mod_tag_unique(Q1, Q2, epigenomic_seq):
     """Computes a SAM tag for base modifications.
